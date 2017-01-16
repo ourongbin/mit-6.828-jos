@@ -71,7 +71,19 @@ trap_init(void)
 {
 	extern struct Segdesc gdt[];
 
+	extern void (* handler[])();
+	extern void handler_syscall();
+    int dpl;
 	// LAB 3: Your code here.
+    for (int i = 0; i <= T_SIMDERR; ++i) {
+        if (i != 9 && i != 15) {
+            dpl = 0;
+            if (i == T_BRKPT)
+                dpl = 3;
+            SETGATE(idt[i], 0, GD_KT, handler[i], dpl);
+        }
+    }
+    SETGATE(idt[T_SYSCALL], 0, GD_KT, handler_syscall, 3);
 
 	// Per-CPU setup 
 	trap_init_percpu();
@@ -174,6 +186,16 @@ trap_dispatch(struct Trapframe *tf)
 {
 	// Handle processor exceptions.
 	// LAB 3: Your code here.
+    if (tf->tf_trapno == T_PGFLT) {
+        page_fault_handler(tf);
+        return;
+    } else if (tf->tf_trapno == T_BRKPT) {
+        monitor(tf);
+        return;
+    } else if (tf->tf_trapno == T_SYSCALL) {
+        tf->tf_regs.reg_eax = syscall(tf->tf_regs.reg_eax, tf->tf_regs.reg_edx, tf->tf_regs.reg_ecx, tf->tf_regs.reg_ebx, tf->tf_regs.reg_edi, tf->tf_regs.reg_esi);
+        return;
+    }
 
 	// Handle spurious interrupts
 	// The hardware sometimes raises these because of noise on the
@@ -267,6 +289,10 @@ page_fault_handler(struct Trapframe *tf)
 	fault_va = rcr2();
 
 	// Handle kernel-mode page faults.
+	if ((tf->tf_cs & 3) == 0) {
+        panic("page_fault_handler: a page fault happens in kernel mode. va %08x ip %08x\n",
+		curenv->env_id, fault_va, tf->tf_eip);
+    }
 
 	// LAB 3: Your code here.
 
