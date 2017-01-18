@@ -279,6 +279,10 @@ mem_init_mp(void)
 	//
 	// LAB 4: Your code here:
 
+    size_t i = 0;
+	for ( ; i < NCPU; i++) {
+        boot_map_region(kern_pgdir, (KSTACKTOP - i * (KSTKSIZE + KSTKGAP)) - KSTKSIZE, KSTKSIZE, PADDR(percpu_kstacks[i]), PTE_W);
+	}
 }
 
 // --------------------------------------------------------------
@@ -320,6 +324,7 @@ page_init(void)
 	size_t i;
     size_t pgnoIO = PGNUM(IOPHYSMEM);
     size_t pgnoExt = PGNUM(EXTPHYSMEM);
+    size_t pgnoMPEntry = PGNUM(MPENTRY_PADDR);
     char * topFreeKern = (char *)boot_alloc(0);
     size_t pgnoTopFreeKern = PGNUM(PADDR(topFreeKern));
 	for (i = 0; i < npages; i++) {
@@ -329,6 +334,8 @@ page_init(void)
 	}
     pages[1].pp_link = pages[0].pp_link;
     pages[0].pp_link = NULL;
+    pages[pgnoMPEntry + 1].pp_link = pages[pgnoMPEntry].pp_link;
+    pages[pgnoMPEntry].pp_link = NULL;
     pages[pgnoTopFreeKern].pp_link = pages[pgnoIO].pp_link;
     for (i = pgnoIO; i < pgnoTopFreeKern; i++)
         pages[i].pp_link = NULL;
@@ -606,7 +613,22 @@ mmio_map_region(physaddr_t pa, size_t size)
 	// Hint: The staff solution uses boot_map_region.
 	//
 	// Your code here:
-	panic("mmio_map_region not implemented");
+    uintptr_t end = base + size;
+    pte_t * ptep;
+    struct PageInfo * pp;
+	void * ret = (void *)base;
+
+    for (; base < end; base += PGSIZE, pa += PGSIZE) {
+        if (base >= MMIOLIM)
+            panic("mmio_map_region: base overflow MMIOLIM");
+        ptep = pgdir_walk(kern_pgdir, (void *)base, true);
+        if (!ptep) {
+            panic("mmio_map_region: pgdir_walk failed");
+        }
+        *ptep = (pa | PTE_PCD | PTE_PWT | PTE_W | PTE_P);
+    }
+
+    return ret;
 }
 
 static uintptr_t user_mem_check_addr;
@@ -648,7 +670,7 @@ user_mem_check(struct Env *env, const void *va, size_t len, int perm)
             return -E_FAULT;
         }
         ptep = pgdir_walk(env->env_pgdir, p, false);
-        if (ptep && (*ptep & PTE_P) && (*ptep && PTE_U)) {
+        if (ptep && (*ptep & PTE_P) && (*ptep & PTE_U)) {
             if ((perm & PTE_W) && !(*ptep & PTE_W)) {
                 if (p < va_origin)
                     p = va_origin;
