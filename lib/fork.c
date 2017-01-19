@@ -33,8 +33,19 @@ pgfault(struct UTrapframe *utf)
 	//   You should make three system calls.
 
 	// LAB 4: Your code here.
+     if (!((err & FEC_WR) && (uvpd[PDX(addr)] & PTE_P) && (uvpt[PGNUM(addr)] & PTE_P) && (uvpt[PGNUM(addr)] & PTE_COW)))
+      panic("pgfault: faulting access is either not a write or not to a COW page");
 
-	panic("pgfault not implemented");
+   addr = ROUNDDOWN(addr, PGSIZE);
+   if ((r = sys_page_alloc(0, PFTEMP, PTE_P | PTE_U | PTE_W)) < 0)
+      panic("pgfault: %e", r);
+   memcpy(PFTEMP, addr, PGSIZE);
+   if ((r = sys_page_map(0, PFTEMP, 0, addr, PTE_P | PTE_U | PTE_W)) < 0)
+      panic("pgfault: %e", r);
+   if ((r = sys_page_unmap(0, PFTEMP)) < 0)
+      panic("pgfault: %e", r);
+
+   return;
 }
 
 //
@@ -54,7 +65,16 @@ duppage(envid_t envid, unsigned pn)
 	int r;
 
 	// LAB 4: Your code here.
-	panic("duppage not implemented");
+    void * addr = (void *) (pn * PGSIZE);
+
+    if ((uvpt[pn] & PTE_W) || (uvpt[pn] & PTE_COW)) {
+        if ((r = sys_page_map(0, addr, envid, addr, PTE_P | PTE_U | PTE_COW)) < 0)
+            panic("duppage: %e", r);
+        if ((r = sys_page_map(0, addr, 0, addr, PTE_P | PTE_U | PTE_COW)) < 0)
+            panic("duppage: %e", r);
+    } else if ((r = sys_page_map(0, addr, envid, addr, PTE_P | PTE_U)) < 0)
+        panic("duppage: %e", r);
+
 	return 0;
 }
 
@@ -78,7 +98,39 @@ envid_t
 fork(void)
 {
 	// LAB 4: Your code here.
-	panic("fork not implemented");
+	envid_t envid;
+	uint8_t *addr;
+	int r;
+	extern unsigned char end[];
+
+    set_pgfault_handler(pgfault);
+
+	envid = sys_exofork();
+	if (envid < 0)
+		panic("sys_exofork: %e", envid);
+	if (envid == 0) {
+		thisenv = &envs[ENVX(sys_getenvid())];
+		return 0;
+	}
+
+	for (addr = (uint8_t*) UTEXT; addr < end; addr += PGSIZE)
+		duppage(envid, PGNUM(addr));
+
+	// Also copy the stack we are currently running on.
+	duppage(envid, PGNUM(ROUNDDOWN(&addr, PGSIZE)));
+
+	if ((r = sys_page_alloc(envid, (void *)(UXSTACKTOP - PGSIZE), PTE_P|PTE_U|PTE_W)) < 0)
+		panic("fork: alloc uxstack for child failed. %e", r);
+
+    extern void _pgfault_upcall();
+    if ((r = sys_env_set_pgfault_upcall(envid, _pgfault_upcall)) < 0)
+		panic("fork: set pgfault handler for child failed. %e", r);
+
+	// Start the child environment running
+	if ((r = sys_env_set_status(envid, ENV_RUNNABLE)) < 0)
+		panic("sys_env_set_status: %e", r);
+
+	return envid;
 }
 
 // Challenge!

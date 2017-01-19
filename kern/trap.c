@@ -330,6 +330,31 @@ page_fault_handler(struct Trapframe *tf)
 	//   (the 'tf' variable points at 'curenv->env_tf').
 
 	// LAB 4: Your code here.
+    struct Env * e = curenv;
+    if (e->env_pgfault_upcall) {
+        user_mem_assert(e, (void *)(UXSTACKTOP - PGSIZE), PGSIZE, PTE_U | PTE_W);
+        if (fault_va < UXSTACKTOP - PGSIZE && fault_va >= USTACKTOP) {
+            cprintf("[%08x] page_fault_handler: exstack overflowed.  %08x ip %08x\n",
+                e->env_id, fault_va, tf->tf_eip);
+            env_destroy(e);	// not return
+        }
+        struct UTrapframe * utf;
+        if (tf->tf_esp <= UXSTACKTOP - 1 && tf->tf_esp >= UXSTACKTOP - PGSIZE) {
+            utf = (struct UTrapframe *)((uint32_t)tf->tf_esp - sizeof(uint32_t) - sizeof(struct UTrapframe));
+        } else {
+            utf = (struct UTrapframe *)(UXSTACKTOP - sizeof(struct UTrapframe));
+        }
+        utf->utf_fault_va = fault_va;
+        utf->utf_err = tf->tf_err;
+        utf->utf_regs = tf->tf_regs;
+        utf->utf_eip = tf->tf_eip;
+        utf->utf_eflags = tf->tf_eflags;
+        utf->utf_esp = tf->tf_esp;
+
+        e->env_tf.tf_eip = (uintptr_t)e->env_pgfault_upcall;
+        e->env_tf.tf_esp = (uintptr_t)utf;
+        env_run(e);
+    }
 
 	// Destroy the environment that caused the fault.
 	cprintf("[%08x] user fault va %08x ip %08x\n",
